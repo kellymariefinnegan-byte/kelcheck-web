@@ -53,7 +53,23 @@ button.link, a.link { background: none; border: 0; color: var(--pink); font: inh
 .msg { margin-top: 12px; font-size: .92rem; }
 .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
 nav.tabs { display: flex; gap: 6px; margin: 4px 0 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
-nav.tabs button { flex: 1; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 600; padding: 9px 6px; border-radius: 9px; cursor: pointer; }
+nav.tabs button { flex: 1; border: 0; background: transparent; color: var(--text); font: inherit; font-size: .8rem; font-weight: 600; padding: 9px 1px; white-space: nowrap; border-radius: 9px; cursor: pointer; }
+.check { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.check:first-child { border-top: 0; }
+.check .dot { width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center; font-weight: 800; font-size: .85rem; }
+.check .dot.done { background: var(--ok); color: #fff; } .check .dot.todo { border: 2px solid var(--warn); }
+.check .dot.opt { border: 2px dashed var(--line); }
+.check .grow { flex: 1; min-width: 0; }
+.btn { display: inline-block; padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+.btn.pink { background: var(--pink); color: #fff; border-color: var(--pink); }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; font-weight: 500; }
+.choice input { width: 20px; height: 20px; margin-top: 1px; flex: none; accent-color: var(--pink); }
+select { -webkit-appearance: none; appearance: none; padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23999' stroke-width='2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center; }
+.sigpad { width: 100%; height: 150px; border: 2px dashed var(--line); border-radius: 12px; background: #fff; touch-action: none; display: block; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.note { background: var(--soft-pink); border-radius: 10px; padding: 10px 12px; font-size: .9rem; margin: 10px 0; }
 nav.tabs button.on { background: var(--pink); color: #fff; }
 .row { display: flex; align-items: baseline; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
 .row:first-child { border-top: 0; }
@@ -266,6 +282,7 @@ async function showEmployee(user) {
       <button data-t="schedule">Schedule</button>
       <button data-t="time">Timecards</button>
       <button data-t="leave">Time off</button>
+      <button data-t="papers">Paperwork</button>
       <button data-t="profile">Profile</button>
     </nav>
     <section id="pane"></section>`;
@@ -274,7 +291,7 @@ async function showEmployee(user) {
   });
   const draw = () => {
     app.querySelectorAll("nav.tabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === tab));
-    ({ schedule: drawSchedule, time: drawTimecards, leave: drawLeave, profile: drawProfile })[tab](emp);
+    ({ schedule: drawSchedule, time: drawTimecards, leave: drawLeave, papers: drawPaperwork, profile: drawProfile })[tab](emp);
   };
   draw();
 }
@@ -555,6 +572,422 @@ function policySummary(p) {
   if (p.yearlyCap != null && p.method !== "yearly") t += `, up to ${h(p.yearlyCap)} a year`;
   return t;
 }
+
+
+// ---------------------------------------------------------------- Paperwork
+
+const STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","DC","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","AS","GU","MP","PR","VI"];
+let PW = null;           // the paperwork module, loaded the first time it's needed
+let ANSWERS = null;      // what's been typed this visit (kept in memory only)
+
+async function paperworkKit() {
+  if (PW) return PW;
+  const [PDFLib, core, x25519, chacha, mod] = await Promise.all([
+    import("https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm"),
+    import("https://cdn.jsdelivr.net/npm/@hpke/core@1.9.0/+esm"),
+    import("https://cdn.jsdelivr.net/npm/@hpke/dhkem-x25519@1.8.0/+esm"),
+    import("https://cdn.jsdelivr.net/npm/@hpke/chacha20poly1305@1.8.0/+esm"),
+    import("./paperwork.js"),
+  ]);
+  PW = { mod, kit: mod.makePaperwork({ PDFLib, hpke: { CipherSuite: core.CipherSuite, HkdfSha256: core.HkdfSha256,
+    DhkemX25519HkdfSha256: x25519.DhkemX25519HkdfSha256, Chacha20Poly1305: chacha.Chacha20Poly1305 } }) };
+  return PW;
+}
+
+function startAnswers(emp) {
+  if (ANSWERS && ANSWERS._for === emp.id) return ANSWERS;
+  const legal = (emp.w2?.legalName || emp.name || "").trim().split(/\s+/);
+  ANSWERS = {
+    _for: emp.id, firstName: legal[0] ?? "", middleInitial: legal.length > 2 ? legal[1][0] : "",
+    lastName: legal.length > 1 ? legal[legal.length - 1] : "", otherLastNames: "",
+    street: emp.street ?? "", apt: "", city: emp.city ?? "", state: emp.state ?? "VA", zip: emp.zip ?? "",
+    dob: emp.dob ? emp.dob.slice(0, 10) : "", ssn: "", email: emp.email ?? "", phone: "",
+    status: "1", aNumber: "", i94: "", passport: "", workAuthExpires: "",
+    filing: "single", twoJobs: false, children: 0, otherDependents: 0, otherCredits: 0,
+    otherIncome: 0, deductions: 0, extraWithholding: 0, exempt: false,
+    claimSelf: true, claimSpouse: false, dependents: 0, age65: false, spouseAge65: false, blind: false, spouseBlind: false,
+    vaExtra: 0, notSubject: false, notSubjectMilitary: false,
+    bank: "", routing: "", account: "", account2: "", accountType: "Checking", wholePay: true, depositAmount: "",
+    sex: "I choose not to self-identify", race: "I choose not to self-identify", veteran: "I choose not to self-identify",
+    handbookOpened: false,
+  };
+  return ANSWERS;
+}
+
+const isMinor = (emp) => {
+  if (!emp.dob) return false;
+  const dob = new Date(emp.dob), now = new Date();
+  let age = now.getFullYear() - dob.getFullYear();
+  if (now < new Date(now.getFullYear(), dob.getMonth(), dob.getDate())) age--;
+  return age < 18;
+};
+
+async function drawPaperwork(emp) {
+  const pane = document.getElementById("pane");
+  pane.innerHTML = `<p class="muted">Loading…</p>`;
+  const [{ data: docs }, { data: company }] = await Promise.all([
+    sb.from("employee_documents").select("kind, signed_at, created_at, employer_completed_at, expires_on").eq("employee_id", emp.id),
+    sb.from("company_documents").select("*").order("sort_order").order("title"),
+  ]);
+  const latest = (kind) => (docs ?? []).filter((d) => d.kind === kind).sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+  const kinds = ["i9", "w4", "va4", "direct_deposit", "handbook"];
+  if (isMinor(emp) || latest("work_permit")) kinds.push("work_permit");
+  kinds.push("self_id");
+  const titles = {
+    i9: "I-9 — Employment Eligibility", w4: "W-4 — Federal Tax Withholding", va4: "VA-4 — Virginia Tax Withholding",
+    direct_deposit: "Direct Deposit", handbook: "Handbook Acknowledgment", work_permit: "Work Permit (under 18)",
+    self_id: "Voluntary Self-Identification",
+  };
+  const when = (d) => new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  const left = kinds.filter((k) => k !== "self_id" && !latest(k)).length;
+  // Signed links for company documents, made now so tapping opens them straight away.
+  const links = await Promise.all((company ?? []).map(async (c) => {
+    const { data } = await sb.storage.from("company-documents").createSignedUrl(c.file_name, 3600);
+    return { ...c, url: data?.signedUrl };
+  }));
+
+  pane.innerHTML = `
+    <h2>New hire paperwork</h2>
+    <p class="muted" style="margin-top:-4px">${left ? `${left} to go.` : "All done — thank you!"} Forms with your Social Security or bank numbers are locked so only the owner can open them.</p>
+    <div class="card">
+      ${kinds.map((k) => {
+        const d = latest(k), optional = k === "self_id";
+        let status = d ? `Done ${when(d.created_at)}` : optional ? "Optional" : "To do";
+        if (k === "i9" && d && !d.employer_completed_at) status += " · the owner finishes Section 2 with you, using your original documents, by your third day";
+        if (k === "work_permit" && d?.expires_on) status += ` · expires ${when(d.expires_on + "T00:00")}`;
+        return `<div class="check">
+          <div class="dot ${d ? "done" : optional ? "opt" : "todo"}">${d ? "✓" : ""}</div>
+          <div class="grow"><b>${titles[k]}</b><div class="muted">${status}</div></div>
+          <button class="btn ${d ? "" : "pink"}" data-form="${k}" type="button">${d ? "Redo" : "Start"}</button>
+        </div>`;
+      }).join("")}
+    </div>
+    <h2>Company documents</h2>
+    <div class="card">
+      ${links.length ? links.map((c) => `<div class="check"><div class="grow"><b>${esc(c.title)}</b>${c.edition ? ` <span class="muted">· ${esc(c.edition)}</span>` : ""}
+          ${c.description ? `<div class="muted">${esc(c.description)}</div>` : ""}</div>
+          ${c.url ? `<a class="btn" href="${c.url}" target="_blank" rel="noopener" data-handbook="${c.is_handbook ? 1 : 0}">Open</a>` : ""}</div>`).join("")
+        : `<p class="muted">Nothing shared yet.</p>`}
+    </div>`;
+  pane.querySelectorAll("[data-form]").forEach((b) => (b.onclick = () => drawForm(emp, b.dataset.form, links)));
+  pane.querySelectorAll('[data-handbook="1"]').forEach((a) => (a.onclick = () => { startAnswers(emp).handbookOpened = true; }));
+}
+
+// One field. `key` is in ANSWERS; `type` text|date|number|select|check|radio.
+function field(a, key, label, opts = {}) {
+  const v = a[key] ?? "";
+  const id = `f_${key}`;
+  const req = opts.required ? " required" : "";
+  const hint = opts.hint ? `<div class="muted" style="font-size:.85rem;margin-top:4px">${opts.hint}</div>` : "";
+  switch (opts.type) {
+    case "select":
+      return `<label for="${id}">${label}</label><select id="${id}" data-k="${key}">${opts.options.map((o) => {
+        const [val, text] = Array.isArray(o) ? o : [o, o];
+        return `<option value="${esc(val)}"${String(v) === String(val) ? " selected" : ""}>${esc(text)}</option>`;
+      }).join("")}</select>${hint}`;
+    case "check":
+      return `<label class="choice"><input type="checkbox" data-k="${key}"${v ? " checked" : ""}> <span>${label}</span></label>${hint}`;
+    case "radio":
+      return `<label>${label}</label>${opts.options.map(([val, text]) =>
+        `<label class="choice"><input type="radio" name="${id}" value="${val}" data-k="${key}"${String(v) === String(val) ? " checked" : ""}> <span>${text}</span></label>`).join("")}${hint}`;
+    default:
+      return `<label for="${id}">${label}</label><input id="${id}" data-k="${key}" type="${opts.type ?? "text"}" value="${esc(v)}"${req}
+        ${opts.inputmode ? ` inputmode="${opts.inputmode}"` : ""}${opts.autocomplete ? ` autocomplete="${opts.autocomplete}"` : ""}${opts.min !== undefined ? ` min="${opts.min}"` : ""}${opts.step ? ` step="${opts.step}"` : ""}>${hint}`;
+  }
+}
+
+function readFields(container, a) {
+  container.querySelectorAll("[data-k]").forEach((el) => {
+    const k = el.dataset.k;
+    if (el.type === "checkbox") a[k] = el.checked;
+    else if (el.type === "radio") { if (el.checked) a[k] = el.value; }
+    else if (el.type === "number") a[k] = el.value === "" ? 0 : Number(el.value);
+    else a[k] = el.value.trim();
+  });
+}
+
+const personFields = (a, { ssn = true, contact = false, middle = true } = {}) => `
+  <div class="row2"><div>${field(a, "firstName", "First name", { required: true, autocomplete: "given-name" })}</div>
+  <div>${field(a, "lastName", "Last name", { required: true, autocomplete: "family-name" })}</div></div>
+  ${middle ? field(a, "middleInitial", "Middle initial (if any)") : ""}
+  ${field(a, "street", "Street address", { required: true, autocomplete: "address-line1" })}
+  ${field(a, "apt", "Apartment number (if any)")}
+  <div class="row2"><div>${field(a, "city", "City or town", { required: true })}</div>
+  <div>${field(a, "state", "State", { type: "select", options: STATES })}</div></div>
+  ${field(a, "zip", "ZIP code", { required: true, inputmode: "numeric", autocomplete: "postal-code" })}
+  ${ssn ? field(a, "ssn", "Social Security number", { required: true, inputmode: "numeric", autocomplete: "off",
+      hint: "9 digits. It's locked on this device before it's sent, so only the owner can see it." }) : ""}
+  ${contact ? field(a, "dob", "Date of birth", { type: "date", required: true }) + field(a, "email", "Email (optional)", { type: "email" }) + field(a, "phone", "Phone (optional)", { type: "tel" }) : ""}`;
+
+const FORM_INTRO = {
+  i9: "Section 1 of the federal Form I-9, which every new employee fills in by their first day. On your first day (or within three business days), bring original documents that show who you are and that you can work in the U.S. — for example a U.S. passport, or a driver's license or school ID plus a Social Security card or birth certificate. The owner looks at them in person and completes Section 2.",
+  w4: "The IRS Form W-4 tells the shop how much federal income tax to take out of your pay. If you're not sure, a single person with one job usually fills in only Step 1 and signs. The IRS Tax Withholding Estimator (irs.gov/w4app) can help with the rest.",
+  va4: "The Virginia Form VA-4 tells the shop how much Virginia income tax to take out. Most people claim themselves (1), plus a spouse and dependents if they have them.",
+  direct_deposit: "Where your pay goes. You'll find the routing and account numbers at the bottom of a check or in your bank's app.",
+  handbook: "Please open and read the handbook (under Company documents) before you sign.",
+  self_id: "Filling this in is voluntary. Choosing not to answer won't affect your job in any way. Your answers are kept apart from the rest of your file and are never used in any decision about you.",
+  work_permit: "Under 18? Virginia needs a work permit (employment certificate) before you start. Upload a photo or PDF of it.",
+};
+
+function formBody(kind, a, emp) {
+  switch (kind) {
+    case "i9":
+      return personFields(a, { contact: true }) + field(a, "otherLastNames", "Other last names you've used (if any)") +
+        field(a, "status", "I am:", { type: "radio", options: [["1", "A citizen of the United States"], ["2", "A noncitizen national of the United States"],
+          ["3", "A lawful permanent resident"], ["4", "A noncitizen authorized to work"]] }) +
+        `<div id="i9more"></div>` +
+        `<div class="note">I am aware that federal law provides for imprisonment and/or fines for false statements, or the use of false documents, in connection with the completion of this form. I attest, under penalty of perjury, that this information, including my selection of the box attesting to my citizenship or immigration status, is true and correct.</div>` +
+        `<p class="muted">If someone helped you fill this in (a preparer or translator), stop here and do it at the shop instead — they have to sign too.</p>`;
+    case "w4":
+      return personFields(a) +
+        field(a, "filing", "Filing status", { type: "radio", options: [["single", "Single or Married filing separately"],
+          ["joint", "Married filing jointly or Qualifying surviving spouse"], ["head", "Head of household (unmarried and paying more than half the costs of keeping up a home for yourself and a qualifying person)"]] }) +
+        `<h2 style="margin-top:18px">Steps 2–4 (only if they apply)</h2>` +
+        field(a, "twoJobs", "Step 2(c): I have two jobs in total (or I'm married filing jointly and we both work, two jobs in total). Check the same box on the other job's W-4.", { type: "check" }) +
+        `<div class="row2"><div>${field(a, "children", "Children under 17", { type: "number", min: 0, hint: "× $2,200" })}</div>
+         <div>${field(a, "otherDependents", "Other dependents", { type: "number", min: 0, hint: "× $500" })}</div></div>` +
+        field(a, "otherCredits", "Other credits (dollars)", { type: "number", min: 0, step: "1" }) +
+        field(a, "otherIncome", "Step 4(a): Other yearly income not from jobs (dollars)", { type: "number", min: 0, step: "1" }) +
+        field(a, "deductions", "Step 4(b): Deductions beyond the standard deduction (dollars, from the W-4 worksheet)", { type: "number", min: 0, step: "1" }) +
+        field(a, "extraWithholding", "Step 4(c): Extra tax to take out each paycheck (dollars)", { type: "number", min: 0, step: "1" }) +
+        field(a, "exempt", "I claim exemption from withholding for 2026: I had no federal income tax liability last year and expect none this year.", { type: "check" });
+    case "va4":
+      return personFields(a, { middle: false }) +
+        field(a, "claimSelf", "Claim myself (leave unticked if someone else, such as a parent, can claim you as a dependent)", { type: "check" }) +
+        field(a, "claimSpouse", "Claim my spouse (only if married and your spouse isn't claiming themselves)", { type: "check" }) +
+        field(a, "dependents", "Number of dependents (not counting you or your spouse)", { type: "number", min: 0 }) +
+        field(a, "age65", "I'll be 65 or older on January 1", { type: "check" }) +
+        field(a, "spouseAge65", "My spouse (claimed above) will be 65 or older on January 1", { type: "check" }) +
+        field(a, "blind", "I am legally blind", { type: "check" }) +
+        field(a, "spouseBlind", "My spouse (claimed above) is legally blind", { type: "check" }) +
+        field(a, "vaExtra", "Extra Virginia tax to take out each paycheck (dollars, optional)", { type: "number", min: 0, step: "1" }) +
+        field(a, "notSubject", "I'm not subject to Virginia withholding (I meet the conditions in the VA-4 instructions)", { type: "check" }) +
+        field(a, "notSubjectMilitary", "I'm not subject to Virginia withholding under the Servicemember Civil Relief Act (military spouse)", { type: "check" });
+    case "direct_deposit":
+      return field(a, "bank", "Bank name", { required: true }) +
+        field(a, "routing", "Routing number (9 digits)", { required: true, inputmode: "numeric", autocomplete: "off" }) +
+        field(a, "account", "Account number", { required: true, inputmode: "numeric", autocomplete: "off" }) +
+        field(a, "account2", "Account number again", { required: true, inputmode: "numeric", autocomplete: "off" }) +
+        field(a, "accountType", "Account type", { type: "select", options: ["Checking", "Savings"] }) +
+        field(a, "wholePay", "Put my whole paycheck in this account", { type: "check" }) +
+        `<div id="ddamount"></div>` +
+        `<div class="note">I authorize ${esc(cfg.storeName)} to deposit my pay into this account, and to correct any deposit made in error. This stays in effect until I give written notice to change or cancel it.</div>`;
+    case "handbook":
+      return `<div class="note">${esc(handbookStatement(currentHandbook))}</div>` +
+        (currentHandbook?.url ? `<p><a class="btn" href="${currentHandbook.url}" target="_blank" rel="noopener" id="openhb">Open the handbook</a></p>`
+          : `<p class="muted">The owner hasn't uploaded the handbook here yet — ask for a copy, read it, then sign.</p>`) +
+        field(a, "handbookRead", "I have received the handbook and I'm responsible for reading it.", { type: "check" });
+    case "self_id":
+      return field(a, "sex", "Sex", { type: "radio", options: PW.mod.SELF_ID.sexes.map((x) => [x, x]) }) +
+        field(a, "race", "Race / ethnicity", { type: "radio", options: PW.mod.SELF_ID.races.map((x) => [x, x]) }) +
+        field(a, "veteran", "Veteran status", { type: "radio", options: PW.mod.SELF_ID.veterans.map((x) => [x, x]) });
+    case "work_permit":
+      return `<label for="permit">Photo or PDF of the permit</label><input id="permit" type="file" accept="image/*,application/pdf" required>` +
+        field(a, "permitExpires", "It expires on (optional)", { type: "date" });
+  }
+  return "";
+}
+
+let currentHandbook = null;
+function handbookStatement(hb) {
+  const name = hb?.title || "Employee Handbook";
+  return `I have received a copy of the ${name}${hb?.edition ? ` (${hb.edition})` : ""}. I understand that I am responsible for reading it and following the policies in it, that I may ask the owner about anything I don't understand, and that the policies may change. I understand that the handbook is not a contract of employment.`;
+}
+
+function signaturePad(canvas) {
+  const ctx = canvas.getContext("2d");
+  const scale = window.devicePixelRatio || 1;
+  const fit = () => { const r = canvas.getBoundingClientRect(); canvas.width = r.width * scale; canvas.height = r.height * scale; ctx.scale(scale, scale);
+    ctx.lineWidth = 2.4; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#0b1f6b"; };
+  fit();
+  let drawing = false, empty = true, box = null;
+  const at = (e) => { const r = canvas.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const grow = ([x, y]) => { box = box ? { x0: Math.min(box.x0, x), y0: Math.min(box.y0, y), x1: Math.max(box.x1, x), y1: Math.max(box.y1, y) } : { x0: x, y0: y, x1: x, y1: y }; };
+  canvas.onpointerdown = (e) => { drawing = true; empty = false; canvas.setPointerCapture(e.pointerId); const p = at(e); grow(p); ctx.beginPath(); ctx.moveTo(...p); };
+  canvas.onpointermove = (e) => { if (!drawing) return; const p = at(e); grow(p); ctx.lineTo(...p); ctx.stroke(); };
+  canvas.onpointerup = canvas.onpointercancel = () => { drawing = false; };
+  return {
+    isEmpty: () => empty,
+    clear: () => { ctx.clearRect(0, 0, canvas.width, canvas.height); empty = true; box = null; },
+    // Just the signature, trimmed to what was drawn, as PNG bytes.
+    png: async () => {
+      const pad = 6, x = Math.max(0, (box.x0 - pad) * scale), y = Math.max(0, (box.y0 - pad) * scale);
+      const w = Math.min(canvas.width - x, (box.x1 - box.x0 + pad * 2) * scale), h = Math.min(canvas.height - y, (box.y1 - box.y0 + pad * 2) * scale);
+      const out = document.createElement("canvas"); out.width = w; out.height = h;
+      out.getContext("2d").drawImage(canvas, x, y, w, h, 0, 0, w, h);
+      const blob = await new Promise((r) => out.toBlob(r, "image/png"));
+      return new Uint8Array(await blob.arrayBuffer());
+    },
+  };
+}
+
+async function drawForm(emp, kind, companyLinks) {
+  const pane = document.getElementById("pane");
+  pane.innerHTML = `<p class="muted">Getting the form ready…</p>`;
+  try { await paperworkKit(); } catch { pane.innerHTML = `<div class="card msg bad">The form tools didn't load. Check your connection and try again.</div>`; return; }
+  const a = startAnswers(emp);
+  currentHandbook = (companyLinks ?? []).find((c) => c.is_handbook) ?? null;
+  const signs = kind !== "self_id" && kind !== "work_permit";
+  const titles = { i9: "Form I-9, Section 1", w4: "Form W-4", va4: "Form VA-4", direct_deposit: "Direct Deposit",
+    handbook: "Handbook Acknowledgment", self_id: "Voluntary Self-Identification", work_permit: "Work Permit" };
+  pane.innerHTML = `
+    <p><button class="link" id="back" type="button">‹ Paperwork</button></p>
+    <h1 style="margin-top:0">${titles[kind]}</h1>
+    <p class="lead">${esc(FORM_INTRO[kind])}</p>
+    <form class="card" id="form" novalidate>
+      ${formBody(kind, a, emp)}
+      ${signs ? `<label>Sign here</label><canvas class="sigpad" id="sig"></canvas>
+        <p style="margin:6px 0 0"><button class="link" type="button" id="clearsig">Clear signature</button></p>` : ""}
+      ${KINDS_OFFICIAL.has(kind) ? `<button class="btn" type="button" id="preview" style="margin-top:16px;width:100%">Preview the form</button>` : ""}
+      <button class="primary" type="submit" id="send">${signs ? "Sign and send" : "Send"}</button>
+      <div class="msg" id="msg"></div>
+    </form>`;
+  document.getElementById("back").onclick = () => drawPaperwork(emp);
+  const form = document.getElementById("form");
+  const pad = signs ? signaturePad(document.getElementById("sig")) : null;
+  if (pad) document.getElementById("clearsig").onclick = () => pad.clear();
+  const hb = document.getElementById("openhb");
+  if (hb) hb.onclick = () => { a.handbookOpened = true; };
+
+  // Questions that depend on earlier answers.
+  const refresh = () => {
+    readFields(form, a);
+    const more = document.getElementById("i9more");
+    if (more) more.innerHTML = a.status === "3" ? field(a, "aNumber", "USCIS or A-Number", { required: true })
+      : a.status === "4" ? field(a, "workAuthExpires", "Work authorization expires (leave blank if it doesn't)", { type: "date" }) +
+        `<p class="muted">Enter one of these:</p>` + field(a, "aNumber", "USCIS A-Number") + field(a, "i94", "Form I-94 admission number") +
+        field(a, "passport", "Foreign passport number and country of issuance") : "";
+    const amt = document.getElementById("ddamount");
+    if (amt) amt.innerHTML = a.wholePay ? "" : field(a, "depositAmount", "Amount each payday (dollars)", { type: "number", min: 0, step: "0.01" });
+  };
+  form.addEventListener("change", refresh);
+  refresh();
+
+  const msg = document.getElementById("msg");
+  const fail = (text) => { msg.className = "msg bad"; msg.textContent = text; };
+
+  function problems() {
+    readFields(form, a);
+    const need = (k, label) => (!String(a[k] ?? "").trim() ? `${label} is needed.` : null);
+    const ssnOk = () => (a.ssn.replace(/\D/g, "").length === 9 ? null : "The Social Security number needs 9 digits.");
+    const person = [need("firstName", "First name"), need("lastName", "Last name"), need("street", "Street address"), need("city", "City"),
+      need("zip", "ZIP code")];
+    switch (kind) {
+      case "i9": return [...person, ssnOk(), need("dob", "Date of birth"),
+        a.status === "3" ? need("aNumber", "The USCIS or A-Number") : null,
+        a.status === "4" && !(a.aNumber || a.i94 || a.passport) ? "Enter an A-Number, I-94 number or passport number." : null].find(Boolean);
+      case "w4": case "va4": return [...person, ssnOk()].find(Boolean);
+      case "direct_deposit":
+        if (!a.bank) return "The bank name is needed.";
+        if (!PW.mod.routingValid(a.routing)) return "That isn't a valid routing number — check the nine digits.";
+        if (a.account.replace(/\D/g, "").length < 4) return "The account number is needed.";
+        if (a.account !== a.account2) return "The two account numbers don't match.";
+        if (!a.wholePay && !(Number(a.depositAmount) > 0)) return "Enter the amount for each payday.";
+        return null;
+      case "handbook":
+        if (currentHandbook?.url && !a.handbookOpened) return "Open the handbook first.";
+        return a.handbookRead ? null : "Tick the box to say you've received the handbook.";
+      case "work_permit": return document.getElementById("permit").files[0] ? null : "Choose the photo or PDF of your permit.";
+    }
+    return null;
+  }
+
+  async function buildPDF(signature) {
+    const { kit } = PW;
+    const blank = async (k) => {
+      const { data, error } = await sb.functions.invoke("official-forms", { body: { kind: k } });
+      if (error || !data) throw new Error("The official form couldn't be fetched. Try again in a moment.");
+      return new Uint8Array(await data.arrayBuffer());
+    };
+    const sig = signature ?? (await placeholderSignature());
+    switch (kind) {
+      case "i9": return await kit.fillI9(await blank("i9"), a, sig);
+      case "w4": {
+        const { data: emp2 } = await sb.from("employer_details").select("*").limit(1);
+        return await kit.fillW4(await blank("w4"), a, sig, { ...(emp2?.[0] ?? {}), firstDay: emp.date_of_hire ?? null });
+      }
+      case "va4": return await kit.fillVA4(await blank("va4"), { ...a, extraWithholding: a.vaExtra }, sig);
+      case "direct_deposit":
+        return await kit.shopForm({ storeName: cfg.storeName, title: "Direct Deposit Authorization", signaturePng: signature, signer: emp.name,
+          lines: [["Employee", emp.name], ["Bank", a.bank], ["Routing number", a.routing.replace(/\D/g, "")],
+            ["Account number", a.account.replace(/\D/g, "")], ["Account type", a.accountType],
+            ["Deposit", a.wholePay ? "Entire net pay" : `$${Number(a.depositAmount).toFixed(2)} each payday`]],
+          statement: `I authorize ${cfg.storeName} to deposit my pay into the account above, and to correct any deposit made in error. This authorization stays in effect until I give written notice to change or cancel it.` });
+      case "handbook":
+        return await kit.shopForm({ storeName: cfg.storeName, title: "Handbook Acknowledgment", signaturePng: signature, signer: emp.name,
+          lines: [["Employee", emp.name], ["Handbook", (currentHandbook?.title || "Employee Handbook") + (currentHandbook?.edition ? ` — ${currentHandbook.edition}` : "")]],
+          statement: handbookStatement(currentHandbook) });
+      case "self_id":
+        return await kit.shopForm({ storeName: cfg.storeName, title: "Voluntary Self-Identification", signer: null,
+          lines: [["Sex", a.sex], ["Race / ethnicity", a.race], ["Veteran status", a.veteran]],
+          statement: "Voluntary self-identification. Kept separate from the personnel file and not used in any employment decision." });
+    }
+  }
+
+  // For a preview before signing: a light "SIGN HERE" stand-in.
+  async function placeholderSignature() {
+    const c = document.createElement("canvas"); c.width = 360; c.height = 60;
+    const g = c.getContext("2d"); g.fillStyle = "#c33"; g.font = "bold 30px sans-serif"; g.fillText("(sign below)", 4, 42);
+    return new Uint8Array(await (await new Promise((r) => c.toBlob(r, "image/png"))).arrayBuffer());
+  }
+
+  const preview = document.getElementById("preview");
+  if (preview) preview.onclick = async () => {
+    const p = problems(); if (p) return fail(p);
+    msg.className = "msg"; msg.textContent = "Making the preview…";
+    // Opened before the wait so phones don't block it as a pop-up.
+    const win = window.open("", "_blank");
+    try {
+      const bytes = await buildPDF(pad && !pad.isEmpty() ? await pad.png() : null);
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      if (win) win.location = url; else location.href = url;
+      msg.textContent = "";
+    } catch (e) { win?.close(); fail(e.message); }
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const p = problems(); if (p) return fail(p);
+    if (pad && pad.isEmpty()) return fail("Sign in the box first.");
+    const send = document.getElementById("send");
+    send.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
+    try {
+      const sensitive = ["i9", "w4", "va4", "direct_deposit"].includes(kind);
+      const id = crypto.randomUUID();
+      let bytes, contentType = "application/pdf", ext = "pdf", expires = null;
+      if (kind === "work_permit") {
+        const file = document.getElementById("permit").files[0];
+        bytes = new Uint8Array(await file.arrayBuffer());
+        contentType = file.type || "application/pdf";
+        ext = contentType === "application/pdf" ? "pdf" : contentType.includes("png") ? "png" : "jpg";
+        expires = a.permitExpires || null;
+      } else {
+        bytes = await buildPDF(pad ? await pad.png() : null);
+      }
+      if (sensitive) {
+        const { data: keyRows } = await sb.from("records_lock_key").select("public_key").limit(1);
+        const key = keyRows?.[0]?.public_key;
+        if (!key) throw new Error("This form can't be sent until the owner turns on the records lock. Let them know.");
+        bytes = await PW.kit.sealFile(bytes, key, `document:${id}`);
+      }
+      const path = `${emp.id}/${id}.${ext}`;
+      const up = await sb.storage.from("employee-documents").upload(path, new Blob([bytes], { type: contentType }), { contentType });
+      if (up.error) throw new Error("The upload didn't go through. Try again.");
+      const { error } = await sb.from("employee_documents").insert({
+        id, employee_id: emp.id, kind, title: "", file_name: path, content_type: contentType, sensitive,
+        signed_at: signs ? new Date().toISOString() : null, expires_on: expires, note: "Filled in online",
+      });
+      if (error) throw new Error("It was uploaded but not recorded. Try again.");
+      pane.innerHTML = `<div class="card"><h2 style="margin-top:0">Sent ✓</h2><p>${esc(titles[kind])} is saved${sensitive ? " and locked so only the owner can open it" : ""}.</p>
+        ${kind === "i9" ? "<p>Bring your original documents on your first day; the owner completes Section 2 with you.</p>" : ""}
+        <button class="primary" id="done" type="button">Back to paperwork</button></div>`;
+      document.getElementById("done").onclick = () => drawPaperwork(emp);
+    } catch (err) {
+      send.disabled = false; fail(err.message || "Something went wrong. Try again.");
+    }
+  };
+}
+const KINDS_OFFICIAL = new Set(["i9", "w4", "va4", "direct_deposit", "handbook", "self_id"]);
 
 // ---------------------------------------------------------------- Profile
 
