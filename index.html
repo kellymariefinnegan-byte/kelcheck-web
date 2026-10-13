@@ -237,8 +237,8 @@ function showSetPassword(token) {
     go.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
     const { data, error } = await sb.functions.invoke("manage-logins", { body: { action: "set_password", token, password: pw } });
     if (error || !data?.ok) {
-      let text = "That didn't work. Ask the owner for a new link.";
-      try { text = (await error.context.json()).error ?? text; } catch {}
+      let text = "That didn't work. Check your connection and try again; if it keeps happening, ask for a new link.";
+      try { text = (await error.context.json()).error ?? text; } catch { if (error?.message) text += ` (${error.message})`; }
       msg.className = "msg bad"; msg.textContent = text; go.disabled = false; return;
     }
     history.replaceState(null, "", location.pathname);
