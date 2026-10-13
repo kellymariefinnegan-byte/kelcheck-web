@@ -45,8 +45,8 @@ h2 { color: var(--heading); font-size: 1.1rem; margin: 22px 0 8px; }
 p.lead { color: var(--muted); margin: 0 0 16px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 0 0 12px; }
 label { display: block; font-size: .9rem; font-weight: 600; margin: 12px 0 6px; }
-input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
-input:focus { outline: 2px solid var(--pink); outline-offset: 1px; }
+input, select { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+input:focus, select:focus { outline: 2px solid var(--pink); outline-offset: 1px; }
 button.primary { width: 100%; margin-top: 16px; padding: 13px; border: 0; border-radius: 10px; background: var(--pink); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
 button.primary[disabled] { opacity: .5; cursor: default; }
 button.link, a.link { background: none; border: 0; color: var(--pink); font: inherit; cursor: pointer; padding: 0; text-decoration: none; font-weight: 600; }
@@ -103,9 +103,13 @@ const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); r
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const daysBetween = (a, b) => Math.round((startOfDay(b) - startOfDay(a)) / 86400000);
 
+let LEAVE_POLICIES = [];
+let EARNING_CODES = {};
 async function loadSchedule() {
   const { data } = await sb.from("pay_schedule").select("*").limit(1);
   const s = data?.[0]?.schedule;
+  LEAVE_POLICIES = (data?.[0]?.leave_policies ?? []).filter((p) => p.isActive !== false);
+  EARNING_CODES = Object.fromEntries((data?.[0]?.earning_codes ?? []).map((c) => [c.id, c]));
   if (s) {
     SCHEDULE = {
       frequency: s.frequency ?? "biweekly",
@@ -137,8 +141,8 @@ function payPeriod(index) {
   const last = addDays(end, -1);
   return { index, start, end, last, payday: addDays(last, paydayAfterDays) };
 }
-function currentPeriodIndex() {
-  const { frequency, start: anchor } = SCHEDULE, today = startOfDay(new Date());
+function currentPeriodIndex(date = new Date()) {
+  const { frequency, start: anchor } = SCHEDULE, today = startOfDay(date);
   if (frequency === "weekly" || frequency === "biweekly") {
     return Math.floor(daysBetween(anchor, today) / (frequency === "weekly" ? 7 : 14));
   }
@@ -261,6 +265,7 @@ async function showEmployee(user) {
     <nav class="tabs">
       <button data-t="schedule">Schedule</button>
       <button data-t="time">Timecards</button>
+      <button data-t="leave">Time off</button>
       <button data-t="profile">Profile</button>
     </nav>
     <section id="pane"></section>`;
@@ -269,7 +274,7 @@ async function showEmployee(user) {
   });
   const draw = () => {
     app.querySelectorAll("nav.tabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === tab));
-    ({ schedule: drawSchedule, time: drawTimecards, profile: drawProfile })[tab](emp);
+    ({ schedule: drawSchedule, time: drawTimecards, leave: drawLeave, profile: drawProfile })[tab](emp);
   };
   draw();
 }
@@ -362,13 +367,193 @@ async function drawTimecards(emp) {
           const today = entries.filter((e) => startOfDay(e.in).getTime() === d.getTime());
           const h = today.reduce((t, e) => t + hrs(e), 0);
           return `<div class="row"><div class="day">${day(d)}</div><div class="what">${today.length
-            ? today.map((e) => `${time(e.in)} – ${e.out ? time(e.out) : "on the clock"}`).join("<br>")
+            ? today.map((e) => e.earning_code && e.earning_code !== "REG"
+                ? `${esc(EARNING_CODES[e.earning_code]?.name ?? e.earning_code)}`
+                : `${time(e.in)} – ${e.out ? time(e.out) : "on the clock"}`).join("<br>")
             : `<span class="off">Off</span>`}</div>${today.length ? `<div class="num">${h.toFixed(2)}</div>` : ""}</div>`;
         }).join("")}
       </div>`).join("")}
     <p class="muted">Something wrong? Ask the owner to fix the timecard. Pay shown is before taxes and deductions; pay stubs come with KelCheck payroll.</p>`;
   document.getElementById("prev").onclick = () => { periodIndex--; drawTimecards(emp); };
   document.getElementById("next").onclick = () => { periodIndex++; drawTimecards(emp); };
+}
+
+// ---------------------------------------------------------------- Time off
+
+const r2 = (h) => Math.round(h * 100) / 100;
+const fmtH = (h) => `${r2(h).toFixed(2)}`;
+
+function appliesTo(policy, emp) {
+  if (policy.isActive === false) return false;
+  if (policy.hourlyOnly && emp.pay_type === "salary") return false;
+  return !(emp.payroll?.leaveExclusions ?? []).includes(policy.id);
+}
+
+// The same calculation as the POS (LeaveBalance.compute in LeaveAccrual.swift).
+function leaveBalance(policy, emp, entries, asOf = new Date()) {
+  const start = startOfDay(new Date(policy.effectiveFrom ?? SCHEDULE.start));
+  const mine = entries.filter((e) => e.out && e.in >= start && e.in <= asOf).sort((a, b) => a.in - b.in);
+  const isWorked = (e) => EARNING_CODES[e.earning_code ?? "REG"]?.countsAsWorked ?? (e.earning_code == null || e.earning_code === "REG");
+  const worked = mine.filter(isWorked);
+  const used = mine.filter((e) => (e.earning_code ?? "REG") === policy.earningCode);
+  const adjustments = (emp.payroll?.leaveAdjustments ?? [])
+    .map((a) => ({ ...a, when: new Date(a.date) }))
+    .filter((a) => a.policyID === policy.id && a.when <= asOf);
+  const hrs = (e) => Math.max((e.out - e.in) / 3600000, 0);
+  const events = [];
+  let balance = 0, earnedThis = 0, usedThis = 0;
+  const firstYear = start.getFullYear(), lastYear = asOf.getFullYear();
+  for (let year = firstYear; year <= lastYear; year++) {
+    const yearStart = new Date(year, 0, 1), yearEnd = new Date(year + 1, 0, 1);
+    let earned = 0;
+    const earn = (hours, date, note) => {
+      let h = hours;
+      if (policy.yearlyCap != null) h = Math.min(h, Math.max(policy.yearlyCap - earned, 0));
+      h = r2(h);
+      if (h <= 0) return;
+      earned += h; balance += h;
+      events.push({ date, kind: "Earned", hours: h, note });
+    };
+    if ((policy.method ?? "perHoursWorked") === "perHoursWorked") {
+      const groups = new Map();
+      for (const e of worked.filter((e) => e.in >= yearStart && e.in < yearEnd)) {
+        const i = currentPeriodIndex(e.in);
+        if (!groups.has(i)) groups.set(i, []);
+        groups.get(i).push(e);
+      }
+      for (const i of [...groups.keys()].sort((a, b) => a - b)) {
+        const shifts = groups.get(i), h = shifts.reduce((t, e) => t + hrs(e), 0), p = payPeriod(i);
+        earn(h / Math.max(policy.perHoursWorked ?? 30, 0.01) * (policy.hoursEarned ?? 1),
+             new Date(Math.min(p.last, shifts[shifts.length - 1].in)), `${h.toFixed(2)} hours worked`);
+      }
+    } else if (policy.method === "perPayPeriod") {
+      let p = payPeriod(currentPeriodIndex(new Date(Math.max(start, yearStart))));
+      while (p.end <= asOf && p.last < yearEnd) {
+        if (p.last >= start && p.last >= yearStart) earn(policy.hoursEarned, p.last, "Pay period");
+        p = payPeriod(p.index + 1);
+      }
+    } else {
+      earn(policy.hoursEarned, new Date(Math.max(start, yearStart)), `For ${year}`);
+    }
+    const yearUsed = used.filter((e) => e.in >= yearStart && e.in < yearEnd);
+    for (const u of yearUsed) { const h = r2(hrs(u)); balance -= h; events.push({ date: u.in, kind: "Used", hours: -h, note: u.note || "Taken" }); }
+    for (const a of adjustments.filter((a) => a.when >= yearStart && a.when < yearEnd)) {
+      balance += a.hours;
+      events.push({ date: a.when, kind: a.hours >= 0 ? "Awarded" : "Taken away", hours: a.hours, note: a.note || "" });
+    }
+    if (year === lastYear) { earnedThis = earned; usedThis = yearUsed.reduce((t, e) => t + hrs(e), 0); }
+    else if (policy.carryoverCap != null && balance > policy.carryoverCap) {
+      events.push({ date: new Date(yearEnd - 1), kind: "Didn't carry over", hours: -(balance - policy.carryoverCap), note: "" });
+      balance = policy.carryoverCap;
+    }
+  }
+  return { available: r2(balance), earnedThis, usedThis, events: events.sort((a, b) => b.date - a.date) };
+}
+
+async function drawLeave(emp) {
+  const pane = document.getElementById("pane");
+  pane.innerHTML = `<p class="muted">Loading…</p>`;
+  const policies = LEAVE_POLICIES.filter((p) => appliesTo(p, emp));
+  const earliest = policies.reduce((m, p) => Math.min(m, startOfDay(new Date(p.effectiveFrom ?? SCHEDULE.start))), Date.now());
+  let entries = [];
+  for (let page = 0; page < 20; page++) {
+    const { data, error } = await sb.from("time_entries").select("*").gte("clock_in", new Date(earliest).toISOString())
+      .order("clock_in").range(page * 1000, page * 1000 + 999);
+    if (error) { pane.innerHTML = `<div class="card msg bad">Couldn't load your hours.</div>`; return; }
+    entries = entries.concat(data.map((e) => ({ ...e, in: new Date(e.clock_in), out: e.clock_out ? new Date(e.clock_out) : null })));
+    if (data.length < 1000) break;
+  }
+  const { data: requests } = await sb.from("time_off_requests").select("*").order("start_date", { ascending: false }).limit(50);
+  const reqs = requests ?? [];
+  const pendingFor = (p) => reqs.filter((r) => r.policy_id === p.id && r.status === "pending")
+    .reduce((t, r) => t + (daysBetween(new Date(r.start_date + "T00:00"), new Date(r.end_date + "T00:00")) + 1) * Number(r.hours_per_day), 0);
+  const balances = policies.map((p) => ({ p, b: leaveBalance(p, emp, entries), pending: pendingFor(p) }));
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const statusText = { pending: "Waiting for approval", approved: "Approved", denied: "Denied", cancelled: "Cancelled" };
+  const dayLabel = (s) => new Date(s + "T00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+
+  pane.innerHTML = `
+    ${policies.length ? "" : `<div class="card"><p>You don't have sick leave or PTO set up yet. Ask the owner.</p></div>`}
+    ${balances.map(({ p, b, pending }) => `
+      <div class="card">
+        <div class="muted" style="font-weight:700">${esc(p.name)}</div>
+        <div style="font-size:2rem;font-weight:800;color:${b.available < 0 ? "var(--bad)" : "var(--pink)"}">${fmtH(b.available)} <span class="muted" style="font-size:1rem;font-weight:500">hours available</span></div>
+        <div class="muted">Earned this year: ${fmtH(b.earnedThis)}${p.yearlyCap != null ? ` of ${p.yearlyCap}` : ""} · Used this year: ${fmtH(b.usedThis)}${pending ? ` · <b style="color:var(--warn)">${fmtH(pending)} requested</b>` : ""}</div>
+        <div class="muted" style="margin-top:4px">${esc(policySummary(p))}</div>
+        ${b.events.length ? `<details style="margin-top:8px"><summary class="muted" style="cursor:pointer">History</summary>
+          ${b.events.slice(0, 40).map((e) => `<div class="row"><div class="day">${e.date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</div>
+            <div class="what">${esc(e.kind)}${e.note ? ` <span class="muted">· ${esc(e.note)}</span>` : ""}</div>
+            <div class="num">${e.hours >= 0 ? "+" : ""}${fmtH(e.hours)}</div></div>`).join("")}</details>` : ""}
+      </div>`).join("")}
+    ${policies.length ? `
+    <h2>Ask for time off</h2>
+    <form class="card" id="ask">
+      <label for="type">Type</label>
+      <select id="type">
+        ${policies.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}
+      </select>
+      <label for="from">First day</label><input id="from" type="date" value="${today}" required>
+      <label for="to">Last day</label><input id="to" type="date" value="${today}" required>
+      <label for="hpd">Hours each day</label><input id="hpd" type="number" min="0.25" max="24" step="0.25" value="8" required>
+      <label for="why">Note for the owner (optional)</label><input id="why" type="text" maxlength="200">
+      <button class="primary" type="submit" id="send">Send request</button>
+      <div class="msg" id="askmsg"></div>
+    </form>` : ""}
+    <h2>Your requests</h2>
+    <div class="card">
+      ${reqs.length ? reqs.map((r) => `
+        <div class="row"><div class="what">
+          <b>${esc(LEAVE_POLICIES.find((p) => p.id === r.policy_id)?.name ?? r.earning_code)}</b>
+          · ${dayLabel(r.start_date)}${r.end_date !== r.start_date ? ` – ${dayLabel(r.end_date)}` : ""} · ${Number(r.hours_per_day)} h a day
+          <div class="muted">${statusText[r.status] ?? r.status}${r.decision_note ? ` — ${esc(r.decision_note)}` : ""}${r.note ? ` · “${esc(r.note)}”` : ""}</div>
+        </div>${r.status === "pending" ? `<button class="link" data-cancel="${r.id}" type="button">Cancel</button>` : ""}</div>`).join("")
+        : `<p class="muted">No requests yet.</p>`}
+    </div>`;
+
+  pane.querySelectorAll("[data-cancel]").forEach((b) => {
+    b.onclick = async () => {
+      b.disabled = true;
+      const { error } = await sb.from("time_off_requests").update({ status: "cancelled" }).eq("id", b.dataset.cancel);
+      if (error) { b.disabled = false; alertMsg("Couldn't cancel it. Try again."); return; }
+      drawLeave(emp);
+    };
+  });
+  const form = document.getElementById("ask");
+  if (form) form.onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById("askmsg"), send = document.getElementById("send");
+    const policy = policies.find((p) => p.id === document.getElementById("type").value);
+    const from = document.getElementById("from").value, to = document.getElementById("to").value;
+    const hpd = Number(document.getElementById("hpd").value);
+    const days = daysBetween(new Date(from + "T00:00"), new Date(to + "T00:00")) + 1;
+    if (!from || !to || days < 1) { msg.className = "msg bad"; msg.textContent = "The last day can't be before the first."; return; }
+    if (days > 62) { msg.className = "msg bad"; msg.textContent = "Ask for at most 62 days at a time."; return; }
+    if (!(hpd > 0 && hpd <= 24)) { msg.className = "msg bad"; msg.textContent = "Hours each day must be between 0.25 and 24."; return; }
+    const bal = balances.find((x) => x.p.id === policy.id);
+    const total = days * hpd;
+    if (bal && total > bal.b.available - bal.pending + 0.005 &&
+        !confirm(`That's ${fmtH(total)} hours, and you have ${fmtH(bal.b.available - bal.pending)} available. Send it anyway? The owner decides.`)) return;
+    send.disabled = true; msg.className = "msg"; msg.textContent = "Sending…";
+    const { error } = await sb.from("time_off_requests").insert({
+      id: crypto.randomUUID(), employee_id: emp.id, employee_name: emp.name, policy_id: policy.id,
+      earning_code: policy.earningCode, start_date: from, end_date: to, hours_per_day: hpd,
+      note: document.getElementById("why").value.trim(),
+    });
+    if (error) { send.disabled = false; msg.className = "msg bad"; msg.textContent = "Couldn't send it. Try again."; return; }
+    drawLeave(emp);
+  };
+}
+
+function alertMsg(text) { const m = document.getElementById("askmsg"); if (m) { m.className = "msg bad"; m.textContent = text; } }
+
+function policySummary(p) {
+  const h = (x) => `${Number(x)} hour${Number(x) === 1 ? "" : "s"}`;
+  let t = p.method === "perPayPeriod" ? `${h(p.hoursEarned)} each pay period`
+    : p.method === "yearly" ? `${h(p.hoursEarned)} each January 1`
+    : `${h(p.hoursEarned ?? 1)} per ${h(p.perHoursWorked ?? 30)} worked`;
+  if (p.yearlyCap != null && p.method !== "yearly") t += `, up to ${h(p.yearlyCap)} a year`;
+  return t;
 }
 
 // ---------------------------------------------------------------- Profile
