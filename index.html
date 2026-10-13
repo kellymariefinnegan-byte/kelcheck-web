@@ -91,8 +91,9 @@ const cfg = window.KELCHECK_CONFIG;
 const sb = createClient(cfg.supabaseUrl, cfg.supabaseKey, { auth: { persistSession: true, autoRefreshToken: true } });
 const app = document.getElementById("app");
 const MIN_PASSWORD = 10;
-// Pay periods: every 14 days from Saturday, October 10, 2026, paid the Friday after.
-const PAY_ANCHOR = new Date(2026, 9, 10);
+// The shop's pay schedule (Payroll Setup in the POS), loaded after sign-in.
+// Until then: every two weeks from Saturday, October 10, 2026, paid 7 days after.
+let SCHEDULE = { frequency: "biweekly", start: new Date(2026, 9, 10), paydayAfterDays: 7 };
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const day = (d) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
@@ -102,11 +103,49 @@ const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); r
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const daysBetween = (a, b) => Math.round((startOfDay(b) - startOfDay(a)) / 86400000);
 
-function payPeriod(index) {
-  const start = addDays(PAY_ANCHOR, index * 14);
-  return { index, start, end: addDays(start, 14), last: addDays(start, 13), payday: addDays(start, 20) };
+async function loadSchedule() {
+  const { data } = await sb.from("pay_schedule").select("*").limit(1);
+  const s = data?.[0]?.schedule;
+  if (s) {
+    SCHEDULE = {
+      frequency: s.frequency ?? "biweekly",
+      start: startOfDay(s.firstPeriodStart ? new Date(s.firstPeriodStart) : SCHEDULE.start),
+      paydayAfterDays: s.paydayAfterDays ?? 7,
+    };
+  }
 }
-const currentPeriodIndex = () => Math.floor(daysBetween(PAY_ANCHOR, new Date()) / 14);
+const monthStart = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
+const monthsBetween = (a, b) => (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth();
+const anchorHalf = () => (SCHEDULE.start.getDate() > 15 ? 1 : 0);
+
+// The same periods as the POS (PaySchedule in PayrollSetup.swift).
+function payPeriod(index) {
+  const { frequency, start: anchor, paydayAfterDays } = SCHEDULE;
+  let start, end;
+  if (frequency === "weekly" || frequency === "biweekly") {
+    const len = frequency === "weekly" ? 7 : 14;
+    start = addDays(anchor, index * len); end = addDays(start, len);
+  } else if (frequency === "semimonthly") {
+    const halves = index + anchorHalf(), months = Math.floor(halves / 2);
+    const m = monthStart(anchor); m.setMonth(m.getMonth() + months);
+    const next = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+    if (halves - months * 2 === 0) { start = m; end = addDays(m, 15); } else { start = addDays(m, 15); end = next; }
+  } else {
+    start = monthStart(anchor); start.setMonth(start.getMonth() + index);
+    end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+  }
+  const last = addDays(end, -1);
+  return { index, start, end, last, payday: addDays(last, paydayAfterDays) };
+}
+function currentPeriodIndex() {
+  const { frequency, start: anchor } = SCHEDULE, today = startOfDay(new Date());
+  if (frequency === "weekly" || frequency === "biweekly") {
+    return Math.floor(daysBetween(anchor, today) / (frequency === "weekly" ? 7 : 14));
+  }
+  const months = monthsBetween(monthStart(anchor), monthStart(today));
+  if (frequency === "monthly") return months;
+  return months * 2 + (today.getDate() > 15 ? 1 : 0) - anchorHalf();
+}
 
 // ---------------------------------------------------------------- Routing
 
@@ -205,7 +244,7 @@ async function showHome(session) {
 }
 
 let tab = "schedule";
-let periodIndex = currentPeriodIndex();
+let periodIndex = null;
 
 async function showEmployee(user) {
   const { data: rows, error } = await sb.from("employees").select("*").limit(1);
@@ -216,6 +255,8 @@ async function showEmployee(user) {
     return;
   }
   setHeader(emp.name);
+  await loadSchedule();
+  if (periodIndex === null) periodIndex = currentPeriodIndex();
   app.innerHTML = `
     <nav class="tabs">
       <button data-t="schedule">Schedule</button>
@@ -313,10 +354,10 @@ async function drawTimecards(emp) {
       <div class="stat"><b>${worked}</b><span>Days worked</span></div>
       <div class="stat"><b>${rate ? money(Math.round(total * rate)) : "—"}</b><span>${rate ? "Before taxes" : "Salary"}</span></div>
     </div>
-    ${[0, 1].map((w) => `
-      <h2>Week ${w + 1}</h2>
+    ${[...Array(Math.ceil(daysBetween(p.start, p.end) / 7))].map((_, w) => `
+      <h2>${daysBetween(p.start, p.end) > 7 ? `Days ${w * 7 + 1}–${Math.min(w * 7 + 7, daysBetween(p.start, p.end))}` : "This period"}</h2>
       <div class="card">
-        ${[...Array(7)].map((_, i) => {
+        ${[...Array(Math.min(7, daysBetween(p.start, p.end) - w * 7))].map((_, i) => {
           const d = addDays(p.start, w * 7 + i);
           const today = entries.filter((e) => startOfDay(e.in).getTime() === d.getTime());
           const h = today.reduce((t, e) => t + hrs(e), 0);
