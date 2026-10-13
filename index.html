@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KelCheck</title>
+<meta name="description" content="Your schedule, timecards, pay and profile.">
+<meta name="theme-color" content="#043682">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="KelCheck">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root {
+  --pink: #FF007C; --navy: #043682;
+  --bg: #F6F7FB; --card: #FFFFFF; --text: #14171F; --muted: #636B7A; --line: #E3E6EE;
+  --soft-pink: rgba(255, 0, 124, .08); --warn: #B45309; --ok: #15803D; --bad: #B91C1C;
+  --heading: var(--navy);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1119; --card: #171B26; --text: #EEF0F5; --muted: #9AA3B5; --line: #2A3040;
+    --soft-pink: rgba(255, 0, 124, .16); --warn: #F59E0B; --ok: #4ADE80; --bad: #F87171;
+    --heading: var(--pink);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1119; --card: #171B26; --text: #EEF0F5; --muted: #9AA3B5; --line: #2A3040;
+  --soft-pink: rgba(255, 0, 124, .16); --warn: #F59E0B; --ok: #4ADE80; --bad: #F87171;
+  --heading: var(--pink);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+body { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+.wrap { max-width: 640px; margin: 0 auto; padding: 16px; }
+header.bar { display: flex; align-items: center; gap: 10px; padding: 14px 16px; background: var(--navy); color: #fff; }
+header.bar .brand { font-weight: 800; letter-spacing: .02em; font-size: 1.15rem; }
+header.bar .brand span { color: var(--pink); }
+header.bar .who { margin-left: auto; font-size: .85rem; opacity: .9; text-align: right; }
+header.bar button { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.5); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: .85rem; cursor: pointer; }
+h1 { color: var(--heading); font-size: 1.5rem; margin: 8px 0 4px; }
+h2 { color: var(--heading); font-size: 1.1rem; margin: 22px 0 8px; }
+p.lead { color: var(--muted); margin: 0 0 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 0 0 12px; }
+label { display: block; font-size: .9rem; font-weight: 600; margin: 12px 0 6px; }
+input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+input:focus { outline: 2px solid var(--pink); outline-offset: 1px; }
+button.primary { width: 100%; margin-top: 16px; padding: 13px; border: 0; border-radius: 10px; background: var(--pink); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+button.primary[disabled] { opacity: .5; cursor: default; }
+button.link, a.link { background: none; border: 0; color: var(--pink); font: inherit; cursor: pointer; padding: 0; text-decoration: none; font-weight: 600; }
+.msg { margin-top: 12px; font-size: .92rem; }
+.msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
+nav.tabs { display: flex; gap: 6px; margin: 4px 0 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+nav.tabs button { flex: 1; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 600; padding: 9px 6px; border-radius: 9px; cursor: pointer; }
+nav.tabs button.on { background: var(--pink); color: #fff; }
+.row { display: flex; align-items: baseline; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.row:first-child { border-top: 0; }
+.row .day { width: 96px; flex: none; font-variant-numeric: tabular-nums; }
+.row .what { flex: 1; min-width: 0; }
+.row .num { font-weight: 700; font-variant-numeric: tabular-nums; }
+.off { color: var(--muted); }
+.mine { background: var(--soft-pink); border-radius: 8px; padding-left: 8px; padding-right: 8px; }
+.chip { display: inline-block; font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: var(--soft-pink); color: var(--pink); margin-left: 6px; vertical-align: 1px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { text-align: center; } .stat b { display: block; font-size: 1.2rem; font-variant-numeric: tabular-nums; } .stat span { font-size: .8rem; color: var(--muted); }
+.period { display: flex; align-items: center; gap: 8px; }
+.period .label { flex: 1; text-align: center; } .period .label b { display: block; }
+.period .label span { color: var(--pink); font-size: .85rem; }
+.period button { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); font-size: 1.1rem; cursor: pointer; }
+dl { margin: 0; } dl div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+dl div:first-child { border-top: 0; } dt { color: var(--muted); } dd { margin: 0; text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+.muted { color: var(--muted); font-size: .9rem; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="brand">Kel<span>Check</span></div>
+  <div class="who hidden" id="who"></div>
+  <button id="signout" class="hidden" type="button">Sign out</button>
+</header>
+<main class="wrap" id="app"><p class="muted">Loading…</p></main>
+
+<script src="config.js"></script>
+<script type="module">
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm";
+
+const cfg = window.KELCHECK_CONFIG;
+const sb = createClient(cfg.supabaseUrl, cfg.supabaseKey, { auth: { persistSession: true, autoRefreshToken: true } });
+const app = document.getElementById("app");
+const MIN_PASSWORD = 10;
+// Pay periods: every 14 days from Saturday, October 10, 2026, paid the Friday after.
+const PAY_ANCHOR = new Date(2026, 9, 10);
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const day = (d) => d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+const time = (d) => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+const money = (cents) => (cents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" });
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+const daysBetween = (a, b) => Math.round((startOfDay(b) - startOfDay(a)) / 86400000);
+
+function payPeriod(index) {
+  const start = addDays(PAY_ANCHOR, index * 14);
+  return { index, start, end: addDays(start, 14), last: addDays(start, 13), payday: addDays(start, 20) };
+}
+const currentPeriodIndex = () => Math.floor(daysBetween(PAY_ANCHOR, new Date()) / 14);
+
+// ---------------------------------------------------------------- Routing
+
+async function route() {
+  const hash = location.hash.slice(1);
+  if (hash.startsWith("set-password=")) return showSetPassword(hash.slice("set-password=".length));
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) return showSignIn();
+  return showHome(session);
+}
+window.addEventListener("hashchange", route);
+document.getElementById("signout").onclick = async () => { await sb.auth.signOut(); location.hash = ""; route(); };
+
+function setHeader(text) {
+  const who = document.getElementById("who"), out = document.getElementById("signout");
+  who.textContent = text || ""; who.classList.toggle("hidden", !text); out.classList.toggle("hidden", !text);
+}
+
+// ---------------------------------------------------------------- Sign in
+
+function showSignIn(message) {
+  setHeader("");
+  app.innerHTML = `
+    <h1>Sign in</h1>
+    <p class="lead">Your schedule, timecards, pay stubs and profile at ${esc(cfg.storeName)}.</p>
+    <form class="card" id="f">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <button class="primary" type="submit">Sign in</button>
+      <div class="msg ${message ? "ok" : ""}" id="msg">${esc(message ?? "")}</div>
+    </form>
+    <p class="muted">Forgot your password, or no account yet? Ask the owner to send you a link.</p>`;
+  document.getElementById("f").onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = document.getElementById("msg");
+    msg.className = "msg"; msg.textContent = "Signing in…";
+    const { error } = await sb.auth.signInWithPassword({
+      email: document.getElementById("email").value.trim().toLowerCase(),
+      password: document.getElementById("pw").value,
+    });
+    if (error) { msg.className = "msg bad"; msg.textContent = "That email and password didn't work."; return; }
+    route();
+  };
+}
+
+// ---------------------------------------------------------------- Set password (from the invite email)
+
+function showSetPassword(token) {
+  setHeader("");
+  app.innerHTML = `
+    <h1>Choose your password</h1>
+    <p class="lead">At least ${MIN_PASSWORD} characters. A short phrase is easiest to remember.</p>
+    <form class="card" id="f">
+      <label for="pw">New password</label>
+      <input id="pw" type="password" autocomplete="new-password" minlength="${MIN_PASSWORD}" required>
+      <label for="pw2">Type it again</label>
+      <input id="pw2" type="password" autocomplete="new-password" required>
+      <button class="primary" type="submit" id="go">Save password</button>
+      <div class="msg" id="msg"></div>
+    </form>`;
+  document.getElementById("f").onsubmit = async (e) => {
+    e.preventDefault();
+    const pw = document.getElementById("pw").value, pw2 = document.getElementById("pw2").value;
+    const msg = document.getElementById("msg"), go = document.getElementById("go");
+    if (pw.length < MIN_PASSWORD) { msg.className = "msg bad"; msg.textContent = `Use at least ${MIN_PASSWORD} characters.`; return; }
+    if (pw !== pw2) { msg.className = "msg bad"; msg.textContent = "The two don't match."; return; }
+    go.disabled = true; msg.className = "msg"; msg.textContent = "Saving…";
+    const { data, error } = await sb.functions.invoke("manage-logins", { body: { action: "set_password", token, password: pw } });
+    if (error || !data?.ok) {
+      let text = "That didn't work. Ask the owner for a new link.";
+      try { text = (await error.context.json()).error ?? text; } catch {}
+      msg.className = "msg bad"; msg.textContent = text; go.disabled = false; return;
+    }
+    history.replaceState(null, "", location.pathname);
+    const signed = await sb.auth.signInWithPassword({ email: data.email, password: pw });
+    if (signed.error) return showSignIn("Your password is set. Sign in with it now.");
+    route();
+  };
+}
+
+// ---------------------------------------------------------------- Home
+
+async function showHome(session) {
+  const { data: role } = await sb.rpc("app_role");
+  const me = session.user;
+  if (role === "employee") return showEmployee(me);
+  setHeader(me.email);
+  const text = {
+    owner: "Your owner account works. Running payroll here comes next; until then, manage everything in the Pedestrian POS app.",
+    supervisor: "Your supervisor account works. Approving timecards and time off will appear here.",
+    cpa: "Your accountant access works. Payroll reports (941s, state filings and W-2 data) will appear here once payroll runs in KelCheck.",
+  }[role] ?? "This account doesn't have KelCheck access. If that's a mistake, ask the owner.";
+  app.innerHTML = `<h1>Welcome</h1><div class="card"><p>${esc(text)}</p></div>`;
+}
+
+let tab = "schedule";
+let periodIndex = currentPeriodIndex();
+
+async function showEmployee(user) {
+  const { data: rows, error } = await sb.from("employees").select("*").limit(1);
+  const emp = rows?.[0];
+  if (error || !emp) {
+    setHeader(user.email);
+    app.innerHTML = `<div class="card"><p>Your login isn't linked to an employee profile yet. Ask the owner.</p></div>`;
+    return;
+  }
+  setHeader(emp.name);
+  app.innerHTML = `
+    <nav class="tabs">
+      <button data-t="schedule">Schedule</button>
+      <button data-t="time">Timecards</button>
+      <button data-t="profile">Profile</button>
+    </nav>
+    <section id="pane"></section>`;
+  app.querySelectorAll("nav.tabs button").forEach((b) => {
+    b.onclick = () => { tab = b.dataset.t; draw(); };
+  });
+  const draw = () => {
+    app.querySelectorAll("nav.tabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === tab));
+    ({ schedule: drawSchedule, time: drawTimecards, profile: drawProfile })[tab](emp);
+  };
+  draw();
+}
+
+// ---------------------------------------------------------------- Schedule
+
+async function drawSchedule(emp) {
+  const pane = document.getElementById("pane");
+  pane.innerHTML = `<p class="muted">Loading…</p>`;
+  const from = startOfDay(addDays(new Date(), -1));
+  const { data, error } = await sb.from("scheduled_shifts").select("*").gte("starts_at", from.toISOString()).order("starts_at");
+  if (error) { pane.innerHTML = `<div class="card msg bad">Couldn't load the schedule.</div>`; return; }
+  const shifts = data.map((s) => ({ ...s, start: new Date(s.starts_at), end: new Date(s.ends_at) }));
+  const mine = shifts.filter((s) => s.employee_id === emp.id && s.end > new Date());
+  const hours = (s) => (s.end - s.start) / 3600000;
+  // The team's next seven days.
+  const days = [...Array(7)].map((_, i) => addDays(startOfDay(new Date()), i));
+  pane.innerHTML = `
+    <h2>Your upcoming shifts</h2>
+    <div class="card">
+      ${mine.length ? mine.map((s) => `
+        <div class="row"><div class="day">${day(s.start)}</div>
+          <div class="what">${time(s.start)} – ${time(s.end)}${s.note ? ` <span class="muted">· ${esc(s.note)}</span>` : ""}</div>
+          <div class="num">${hours(s).toFixed(1)} h</div></div>`).join("")
+        : `<p class="muted">Nothing scheduled yet.</p>`}
+      ${mine.length ? `<button class="primary" id="ics" type="button">Add to my calendar</button>
+        <p class="muted" style="margin:10px 0 0">Downloads a calendar file. On iPhone, tap <b>Add All</b>. For Google Calendar, open the file or import it under Settings → Import & export. Adding again after changes updates your shifts instead of doubling them.</p>` : ""}
+    </div>
+    <h2>The next 7 days</h2>
+    <div class="card">
+      ${days.map((d) => {
+        const today = shifts.filter((s) => startOfDay(s.start).getTime() === d.getTime());
+        return `<div class="row"><div class="day">${day(d)}</div><div class="what">${today.length
+          ? today.map((s) => `<div class="${s.employee_id === emp.id ? "mine" : ""}">${esc(s.employee_name)}${s.employee_id === emp.id ? '<span class="chip">You</span>' : ""} <span class="muted">${time(s.start)} – ${time(s.end)}</span></div>`).join("")
+          : `<span class="off">No one scheduled</span>`}</div></div>`;
+      }).join("")}
+    </div>`;
+  const button = document.getElementById("ics");
+  if (button) button.onclick = () => downloadICS(mine);
+}
+
+function downloadICS(shifts) {
+  const utc = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const escText = (s) => String(s).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Pedestrian//KelClock//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    `X-WR-CALNAME:${escText(cfg.storeName)} shifts`];
+  for (const s of shifts) {
+    lines.push("BEGIN:VEVENT", `UID:${s.id}@kelclock.pedestrianstore.com`, `DTSTAMP:${utc(new Date())}`,
+      `DTSTART:${utc(s.start)}`, `DTEND:${utc(s.end)}`,
+      `SUMMARY:${escText(`Work at ${cfg.storeName}${s.note ? ` (${s.note})` : ""}`)}`, "END:VEVENT");
+  }
+  lines.push("END:VCALENDAR");
+  const blob = new Blob([lines.join("\r\n") + "\r\n"], { type: "text/calendar" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${cfg.storeName} shifts.ics` });
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// ---------------------------------------------------------------- Timecards
+
+async function drawTimecards(emp) {
+  const pane = document.getElementById("pane");
+  const p = payPeriod(periodIndex);
+  pane.innerHTML = `<p class="muted">Loading…</p>`;
+  const { data, error } = await sb.from("time_entries").select("*")
+    .gte("clock_in", p.start.toISOString()).lt("clock_in", p.end.toISOString()).order("clock_in");
+  if (error) { pane.innerHTML = `<div class="card msg bad">Couldn't load your timecards.</div>`; return; }
+  const now = new Date();
+  const entries = data.map((e) => ({ ...e, in: new Date(e.clock_in), out: e.clock_out ? new Date(e.clock_out) : null }));
+  const hrs = (e) => Math.max(((e.out ?? now) - e.in) / 3600000, 0);
+  const total = entries.reduce((t, e) => t + hrs(e), 0);
+  const worked = new Set(entries.map((e) => startOfDay(e.in).getTime())).size;
+  const rate = emp.pay_type === "salary" ? null : emp.hourly_rate_cents;
+  pane.innerHTML = `
+    <div class="card period">
+      <button id="prev" aria-label="Previous pay period">‹</button>
+      <div class="label"><b>${p.start.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${p.last.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</b>
+        <span>Payday ${p.payday.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</span></div>
+      <button id="next" aria-label="Next pay period">›</button>
+    </div>
+    <div class="card stats">
+      <div class="stat"><b>${total.toFixed(2)}</b><span>Hours</span></div>
+      <div class="stat"><b>${worked}</b><span>Days worked</span></div>
+      <div class="stat"><b>${rate ? money(Math.round(total * rate)) : "—"}</b><span>${rate ? "Before taxes" : "Salary"}</span></div>
+    </div>
+    ${[0, 1].map((w) => `
+      <h2>Week ${w + 1}</h2>
+      <div class="card">
+        ${[...Array(7)].map((_, i) => {
+          const d = addDays(p.start, w * 7 + i);
+          const today = entries.filter((e) => startOfDay(e.in).getTime() === d.getTime());
+          const h = today.reduce((t, e) => t + hrs(e), 0);
+          return `<div class="row"><div class="day">${day(d)}</div><div class="what">${today.length
+            ? today.map((e) => `${time(e.in)} – ${e.out ? time(e.out) : "on the clock"}`).join("<br>")
+            : `<span class="off">Off</span>`}</div>${today.length ? `<div class="num">${h.toFixed(2)}</div>` : ""}</div>`;
+        }).join("")}
+      </div>`).join("")}
+    <p class="muted">Something wrong? Ask the owner to fix the timecard. Pay shown is before taxes and deductions; pay stubs come with KelCheck payroll.</p>`;
+  document.getElementById("prev").onclick = () => { periodIndex--; drawTimecards(emp); };
+  document.getElementById("next").onclick = () => { periodIndex++; drawTimecards(emp); };
+}
+
+// ---------------------------------------------------------------- Profile
+
+function drawProfile(emp) {
+  const w2 = emp.w2 ?? {}, dd = emp.direct_deposit ?? {};
+  const d = (v) => (v ? new Date(v).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }) : "—");
+  const pay = emp.pay_type === "salary"
+    ? (emp.salary_biweekly_cents ? `${money(emp.salary_biweekly_cents)} every two weeks` : "—")
+    : (emp.hourly_rate_cents ? `${money(emp.hourly_rate_cents)} an hour` : "—");
+  const address = [emp.street, [emp.city, emp.state].filter(Boolean).join(", "), emp.zip].filter(Boolean).join(" ");
+  const item = (k, v) => `<div><dt>${esc(k)}</dt><dd>${esc(v || "—")}</dd></div>`;
+  document.getElementById("pane").innerHTML = `
+    <h2>You</h2>
+    <div class="card"><dl>
+      ${item("Name", emp.name)}${item("Job", emp.job_title)}${item("Email", emp.email)}
+      ${item("Address", address)}${item("Hired", d(emp.date_of_hire))}${item("Pay", pay)}
+    </dl></div>
+    <h2>Tax and direct deposit</h2>
+    <div class="card"><dl>
+      ${item("Legal name", w2.legalName)}${item("Filing status", w2.filingStatus)}
+      ${item("Social Security number", w2.ssnLast4 ? `•••-••-${w2.ssnLast4}` : "")}
+      ${item("Bank", dd.bankName)}${item("Account", dd.accountLast4 ? `•••• ${dd.accountLast4}` : "")}
+    </dl></div>
+    <p class="muted">Full Social Security and account numbers are encrypted and never shown here. To change anything, ask the owner.</p>`;
+}
+
+route();
+</script>
+</body>
+</html>
