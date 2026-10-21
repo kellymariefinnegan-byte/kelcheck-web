@@ -976,6 +976,7 @@ async function drawForm(emp, kind, companyLinks) {
       const { error } = await sb.from("employee_documents").insert({
         id, employee_id: emp.id, kind, title: "", file_name: path, content_type: contentType, sensitive,
         signed_at: signs ? new Date().toISOString() : null, expires_on: expires, note: "Filled in online",
+        withholding: PW.mod.withholdingAnswers(kind, a),
       });
       if (error) throw new Error("It was uploaded but not recorded. Try again.");
       pane.innerHTML = `<div class="card"><h2 style="margin-top:0">Sent ✓</h2><p>${esc(titles[kind])} is saved${sensitive ? " and locked so only the owner can open it" : ""}.</p>

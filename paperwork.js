@@ -62,6 +62,35 @@ export function w4Credits(a) {
     + Math.max(0, Number(a.otherCredits) || 0);
 }
 
+/// The answers that decide withholding, saved with the W-4 or VA-4 (no SSN
+/// or bank details) so the shop's paychecks follow the signed form. Same
+/// shape as the POS app's `Withholding`.
+export function withholdingAnswers(kind, a) {
+  const cents = (n) => { const c = Math.round((Number(n) || 0) * 100); return c > 0 ? c : null; };
+  if (kind === "w4") {
+    const exempt = !!a.exempt;
+    return {
+      filingStatus: { single: "Single", joint: "Married filing jointly", head: "Head of household" }[a.filing] ?? "Single",
+      twoJobs: !!a.twoJobs, federalExempt: exempt,
+      dependentCreditsCents: exempt ? null : cents(w4Credits(a)),
+      otherIncomeCents: exempt ? null : cents(a.otherIncome),
+      deductionsCents: exempt ? null : cents(a.deductions),
+      extraFederalCents: exempt ? null : cents(a.extraWithholding),
+    };
+  }
+  if (kind === "va4") {
+    const exempt = !!(a.notSubject || a.notSubjectMilitary);
+    const t = va4Totals(a);
+    return {
+      stateExempt: exempt,
+      stateExemptions: exempt ? 0 : t.personal,
+      stateAgeBlindExemptions: exempt ? null : t.ageBlind,
+      stateExtraCents: exempt ? null : cents(a.vaExtra),
+    };
+  }
+  return null;
+}
+
 export function makePaperwork({ PDFLib, hpke }) {
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
 
